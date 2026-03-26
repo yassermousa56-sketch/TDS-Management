@@ -1,0 +1,5 @@
+Company Name,Payment Date,Amount,Method,Reference,Notes
+vodafone,2026-03-26,200000.0,Installment,,Initial payment at registration
+carfor,,350000.0,Cash,,
+aliexpress,,100000.0,Installment,,Initial payment at registration
+vodafone,,380000.0,Cash,,

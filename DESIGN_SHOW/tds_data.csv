@@ -1,0 +1,6 @@
+ID,Company Name,Category,Booth Size,Total Contract Value,Payment Status,Date,Amount Paid
+TDS-001,Al-Mahrouq Furniture,Furniture,36,45000,Paid,2026-03-01,45000
+TDS-002,Nile Lighting Co,Lighting,25,32000,Partially Paid,2026-03-05,15000
+TDS-003,Smart Home Tech,Housing,50,78000,Pending,2026-03-10,0
+TDS-004,PayMob Solutions,Fintech,20,55000,Paid,2026-03-12,55000
+TDS-005,Cotton World,Textiles,40,42000,Partially Paid,2026-03-15,20000
