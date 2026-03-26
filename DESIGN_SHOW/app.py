@@ -4,6 +4,8 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 import os
+import hashlib
+import json
 from datetime import datetime, date
 import warnings
 warnings.filterwarnings("ignore")
@@ -29,6 +31,7 @@ st.set_page_config(
 
 CSV_FILE      = "design_show_exhibitors.csv"
 PAYMENTS_FILE = "design_show_payments.csv"
+USERS_FILE    = "design_show_users.json"
 
 COLUMNS = [
     "Company Name", "Category", "Booth Size Category", "Booth Area (m²)",
@@ -136,6 +139,101 @@ def inject_css():
     .stTabs [data-baseweb="tab"] {{ color:{C['grey']}; font-weight:600; font-size:13px; letter-spacing:.5px; }}
     .stTabs [aria-selected="true"] {{ color:{C['gold']} !important; border-bottom-color:{C['gold']} !important; }}
     .hall-badge {{ display:inline-block; background:rgba(201,168,76,.12); border:1px solid {C['gold_dk']}; border-radius:4px; padding:2px 8px; font-size:11px; color:{C['gold']}; font-weight:600; letter-spacing:.5px; }}
+
+    /* ── LOGIN PAGE ── */
+    .login-wrapper {{
+        min-height:100vh;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+        background: radial-gradient(ellipse at 50% 0%, rgba(201,168,76,.10) 0%, transparent 70%),
+                    radial-gradient(ellipse at 80% 100%, rgba(139,105,20,.08) 0%, transparent 60%),
+                    {C['bg']};
+    }}
+    .login-card {{
+        background:{C['bg_card']};
+        border:1px solid {C['border']};
+        border-top:3px solid {C['gold']};
+        border-radius:16px;
+        padding:52px 48px 44px 48px;
+        width:100%;
+        max-width:420px;
+        box-shadow:0 32px 80px rgba(0,0,0,.6), 0 0 60px rgba(201,168,76,.06);
+        animation: fadeUp .6s ease both;
+    }}
+    @keyframes fadeUp {{
+        from {{ opacity:0; transform:translateY(28px); }}
+        to   {{ opacity:1; transform:translateY(0); }}
+    }}
+    .login-logo-wrap {{
+        text-align:center;
+        margin-bottom:32px;
+    }}
+    .login-icon {{
+        font-size:52px;
+        display:block;
+        margin-bottom:12px;
+        animation: pulse 3s ease-in-out infinite;
+    }}
+    @keyframes pulse {{
+        0%,100% {{ transform:scale(1);   filter:drop-shadow(0 0 0px {C['gold']}); }}
+        50%      {{ transform:scale(1.08); filter:drop-shadow(0 0 16px {C['gold']}); }}
+    }}
+    .login-brand {{
+        font-family:'Cormorant Garamond',serif;
+        font-size:26px;
+        font-weight:700;
+        color:{C['gold']};
+        letter-spacing:3px;
+        text-transform:uppercase;
+        line-height:1.1;
+    }}
+    .login-tagline {{
+        font-size:10px;
+        color:{C['grey']};
+        letter-spacing:2px;
+        text-transform:uppercase;
+        margin-top:6px;
+    }}
+    .login-divider {{
+        height:1px;
+        background:linear-gradient(90deg,transparent,{C['gold_dk']},transparent);
+        margin:24px 0;
+    }}
+    .login-title {{
+        font-family:'Cormorant Garamond',serif;
+        font-size:18px;
+        font-weight:600;
+        color:{C['white']};
+        text-align:center;
+        margin-bottom:24px;
+        letter-spacing:1px;
+    }}
+    .login-error {{
+        background:rgba(224,82,82,.12);
+        border:1px solid rgba(224,82,82,.3);
+        border-radius:8px;
+        padding:10px 14px;
+        font-size:12px;
+        color:{C['red']};
+        text-align:center;
+        margin-top:12px;
+        animation: shake .3s ease;
+    }}
+    @keyframes shake {{
+        0%,100% {{ transform:translateX(0); }}
+        25%      {{ transform:translateX(-6px); }}
+        75%      {{ transform:translateX(6px); }}
+    }}
+    .login-footer {{
+        text-align:center;
+        font-size:10px;
+        color:{C['grey']};
+        margin-top:28px;
+        letter-spacing:1px;
+    }}
+    /* hide sidebar on login */
+    .login-hide-sidebar [data-testid="stSidebar"] {{ display:none !important; }}
     </style>
     """, unsafe_allow_html=True)
 
@@ -152,6 +250,270 @@ def kpi_card(label: str, value: str, sub: str = "", color: str = "c-gold") -> st
         f'{sub_part}'
         f'</div>'
     )
+
+
+# ─────────────────────────────────────────────
+# AUTH HELPERS
+# ─────────────────────────────────────────────
+def _hash(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def load_users() -> dict:
+    """Load users from JSON file. Creates default admin/admin if not exists."""
+    if os.path.exists(USERS_FILE):
+        try:
+            with open(USERS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    # Default credentials
+    default = {
+        "admin": {
+            "password_hash": _hash("admin"),
+            "role": "Admin",
+            "display_name": "Administrator",
+            "created_at": str(datetime.now().date()),
+        }
+    }
+    save_users(default)
+    return default
+
+def save_users(users: dict):
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f, indent=2)
+
+def check_credentials(username: str, password: str) -> bool:
+    users = load_users()
+    if username in users:
+        return users[username]["password_hash"] == _hash(password)
+    return False
+
+def get_user_info(username: str) -> dict:
+    users = load_users()
+    return users.get(username, {})
+
+def is_logged_in() -> bool:
+    return st.session_state.get("authenticated", False)
+
+def do_logout():
+    st.session_state.authenticated = False
+    st.session_state.current_user  = ""
+    st.session_state.page          = "analytics"
+
+
+# ─────────────────────────────────────────────
+# LOGIN PAGE
+# ─────────────────────────────────────────────
+def page_login():
+    # Hide sidebar completely on login screen
+    st.markdown("""
+    <style>
+    [data-testid="stSidebar"]          { display:none !important; }
+    [data-testid="collapsedControl"]   { display:none !important; }
+    .block-container { padding:0 !important; max-width:100% !important; }
+    footer { display:none !important; }
+    header { display:none !important; }
+    </style>
+    """, unsafe_allow_html=True)
+
+    # Decorative particle background
+    st.markdown("""
+    <style>
+    @keyframes float1 { 0%,100%{transform:translate(0,0) rotate(0deg);opacity:.3;} 50%{transform:translate(20px,-30px) rotate(180deg);opacity:.7;} }
+    @keyframes float2 { 0%,100%{transform:translate(0,0) rotate(0deg);opacity:.2;} 50%{transform:translate(-15px,25px) rotate(-120deg);opacity:.5;} }
+    @keyframes float3 { 0%,100%{transform:translate(0,0);opacity:.15;} 50%{transform:translate(30px,15px);opacity:.4;} }
+    .particle {position:fixed;border-radius:50%;pointer-events:none;z-index:0;}
+    .p1{width:300px;height:300px;background:radial-gradient(circle,rgba(201,168,76,.08),transparent);top:-80px;left:-80px;animation:float1 12s ease-in-out infinite;}
+    .p2{width:200px;height:200px;background:radial-gradient(circle,rgba(201,168,76,.06),transparent);bottom:60px;right:-40px;animation:float2 15s ease-in-out infinite;}
+    .p3{width:150px;height:150px;background:radial-gradient(circle,rgba(139,105,20,.1),transparent);bottom:200px;left:100px;animation:float3 10s ease-in-out infinite;}
+    </style>
+    <div class="particle p1"></div>
+    <div class="particle p2"></div>
+    <div class="particle p3"></div>
+    """, unsafe_allow_html=True)
+
+    # Center the login card
+    _, center, _ = st.columns([1, 1.2, 1])
+    with center:
+        st.markdown("<div style='height:60px'></div>", unsafe_allow_html=True)
+
+        # Brand card
+        st.markdown(f"""
+        <div class="login-card">
+            <div class="login-logo-wrap">
+                <span class="login-icon">{BRAND['logo_emoji']}</span>
+                <div class="login-brand">{BRAND['name']}</div>
+                <div class="login-tagline">{BRAND['tagline']}</div>
+                <div style="font-size:10px;color:{C['gold_dk']};margin-top:4px;letter-spacing:1px;">{BRAND['edition']}</div>
+            </div>
+            <div class="login-divider"></div>
+            <div class="login-title">Management System Access</div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+
+        # Login form inside a styled container
+        with st.container():
+            username = st.text_input(
+                "Username", placeholder="Enter your username",
+                key="login_user",
+                label_visibility="visible",
+            )
+            password = st.text_input(
+                "Password", placeholder="Enter your password",
+                type="password", key="login_pass",
+                label_visibility="visible",
+            )
+
+            st.markdown("<div style='height:4px'></div>", unsafe_allow_html=True)
+            login_btn = st.button("🔑 LOG IN", use_container_width=True, key="login_btn")
+
+            if login_btn:
+                if not username.strip() or not password.strip():
+                    st.error("Please enter both username and password.")
+                elif check_credentials(username.strip(), password.strip()):
+                    st.session_state.authenticated = True
+                    st.session_state.current_user  = username.strip()
+                    st.session_state.page          = "analytics"
+                    st.rerun()
+                else:
+                    st.markdown(
+                        '<div class="login-error">❌ Invalid username or password. Please try again.</div>',
+                        unsafe_allow_html=True,
+                    )
+
+        st.markdown(f"""
+        <div class="login-footer">
+            © {datetime.now().year} {BRAND['name']} · All rights reserved<br>
+            Unauthorized access is strictly prohibited
+        </div>
+        """, unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────
+# PAGE: SECURITY
+# ─────────────────────────────────────────────
+def page_security():
+    page_header("🔐 Security & Access Control",
+                f"{BRAND['name']} · manage users, passwords, and access permissions")
+
+    users = load_users()
+    current = st.session_state.get("current_user", "")
+
+    # ── Current Users Table ──
+    st.markdown('<div class="section-title">👥 User Accounts</div>', unsafe_allow_html=True)
+    user_rows = []
+    for uname, udata in users.items():
+        user_rows.append({
+            "Username":     uname,
+            "Display Name": udata.get("display_name", uname),
+            "Role":         udata.get("role", "User"),
+            "Created":      udata.get("created_at", "—"),
+            "Status":       "🟢 Active",
+        })
+    user_df = pd.DataFrame(user_rows)
+    st.dataframe(user_df, use_container_width=True, hide_index=True)
+
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
+    tab_pw, tab_add, tab_del = st.tabs(["🔑 Change Password", "➕ Add New User", "🗑️ Remove User"])
+
+    # ── TAB 1: CHANGE PASSWORD ──
+    with tab_pw:
+        st.markdown(f'<div style="font-size:12px;color:{C["grey"]};margin-bottom:16px;">Change password for any existing account.</div>', unsafe_allow_html=True)
+        with st.form("change_pw_form", clear_on_submit=True):
+            target_user = st.selectbox("Select User", list(users.keys()))
+            c1, c2 = st.columns(2)
+            with c1:
+                new_pw  = st.text_input("New Password *",     type="password", placeholder="At least 4 characters")
+            with c2:
+                conf_pw = st.text_input("Confirm Password *", type="password", placeholder="Repeat new password")
+            # Admin must verify own password when changing others
+            own_pw = st.text_input("Your Current Password (required) *", type="password")
+            do_change = st.form_submit_button("✅ Update Password", use_container_width=True)
+
+            if do_change:
+                if not check_credentials(current, own_pw):
+                    st.error("❌ Your current password is incorrect.")
+                elif len(new_pw) < 4:
+                    st.error("❌ New password must be at least 4 characters.")
+                elif new_pw != conf_pw:
+                    st.error("❌ Passwords do not match.")
+                else:
+                    users[target_user]["password_hash"] = _hash(new_pw)
+                    save_users(users)
+                    st.success(f"✅ Password updated for **{target_user}**.")
+
+    # ── TAB 2: ADD USER ──
+    with tab_add:
+        st.markdown(f'<div style="font-size:12px;color:{C["grey"]};margin-bottom:16px;">Create a new user account.</div>', unsafe_allow_html=True)
+        with st.form("add_user_form", clear_on_submit=True):
+            a1, a2 = st.columns(2)
+            with a1:
+                new_uname   = st.text_input("Username *",     placeholder="e.g. sales_01")
+                new_display = st.text_input("Display Name *", placeholder="e.g. Ahmed Sales")
+            with a2:
+                new_role    = st.selectbox("Role", ["Viewer", "Sales", "Manager", "Admin"])
+                new_upass   = st.text_input("Password *", type="password", placeholder="At least 4 characters")
+            do_add = st.form_submit_button("➕ Create User", use_container_width=True)
+
+            if do_add:
+                if not new_uname.strip():
+                    st.error("❌ Username is required.")
+                elif new_uname.strip() in users:
+                    st.error(f"❌ Username '{new_uname}' already exists.")
+                elif len(new_upass) < 4:
+                    st.error("❌ Password must be at least 4 characters.")
+                elif not new_display.strip():
+                    st.error("❌ Display Name is required.")
+                else:
+                    users[new_uname.strip()] = {
+                        "password_hash": _hash(new_upass),
+                        "role":          new_role,
+                        "display_name":  new_display.strip(),
+                        "created_at":    str(date.today()),
+                    }
+                    save_users(users)
+                    st.success(f"✅ User **{new_uname}** created successfully with role **{new_role}**.")
+                    st.rerun()
+
+    # ── TAB 3: REMOVE USER ──
+    with tab_del:
+        st.markdown(f'<div style="font-size:12px;color:{C["grey"]};margin-bottom:16px;">Remove a user account. You cannot delete your own account.</div>', unsafe_allow_html=True)
+        removable = [u for u in users.keys() if u != current]
+        if not removable:
+            st.info("No other users to remove.")
+        else:
+            with st.form("del_user_form", clear_on_submit=True):
+                del_user = st.selectbox("Select User to Remove", removable)
+                confirm  = st.text_input(f"Type the username to confirm deletion")
+                do_del   = st.form_submit_button("🗑️ Remove User", use_container_width=True)
+                if do_del:
+                    if confirm.strip() != del_user:
+                        st.error(f"❌ Type '{del_user}' exactly to confirm.")
+                    else:
+                        del users[del_user]
+                        save_users(users)
+                        st.success(f"✅ User **{del_user}** removed.")
+                        st.rerun()
+
+    # ── Security Tips ──
+    st.markdown('<div class="section-title">🛡️ Security Recommendations</div>', unsafe_allow_html=True)
+    tips = [
+        ("🔑 Change default password", "The default admin/admin password should be changed immediately after first login."),
+        ("👥 Principle of least privilege", "Assign the minimum required role to each user. Use 'Viewer' for read-only staff."),
+        ("🔒 Strong passwords", "Use passwords with 8+ characters, mixing letters, numbers, and symbols."),
+        ("📋 Audit user list", "Regularly review active user accounts and remove accounts for staff who have left."),
+        ("🚪 Always log out", "Always use the Logout button when leaving the system, especially on shared computers."),
+    ]
+    for icon_title, body in tips:
+        st.markdown(
+            f'<div class="insight-card">'
+            f'<div class="insight-title">{icon_title}</div>'
+            f'<div class="insight-body">{body}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
 
 
 # ─────────────────────────────────────────────
@@ -440,17 +802,20 @@ def render_sidebar():
             <div class="ds-logo-tagline">{BRAND['tagline']}</div>
             <div class="ds-logo-edition">{BRAND['edition']}</div>
         </div>""", unsafe_allow_html=True)
+
         pages = {
             f"{BRAND['logo_emoji']} Data Entry":  "data_entry",
             "📊 Analytics Dashboard":             "analytics",
             "🤖 AI Intelligence":                 "ai",
             "🔍 Records & Search":                "records",
             "⚙️ Settings":                        "settings",
+            "🔐 Security":                        "security",
         }
         if "page" not in st.session_state: st.session_state.page = "analytics"
         for label, key in pages.items():
             if st.button(label, key=f"nav_{key}", use_container_width=True):
                 st.session_state.page = key; st.rerun()
+
         st.markdown("<hr class='gold-line'/>", unsafe_allow_html=True)
         df = load_data(); pf = load_payments()
         rate = (df["Paid Amount"].sum()/df["Total Booth Price"].sum()*100) if df["Total Booth Price"].sum() > 0 else 0
@@ -461,6 +826,24 @@ def render_sidebar():
             <div>✅ <b style='color:{C['green']};'>EGP {df['Paid Amount'].sum():,.0f}</b> collected</div>
             <div>📈 <b style='color:{C['gold']};'>{rate:.1f}%</b> collection rate</div>
         </div>""", unsafe_allow_html=True)
+
+        # ── User info + Logout ──
+        st.markdown("<hr class='gold-line'/>", unsafe_allow_html=True)
+        current_user = st.session_state.get("current_user", "")
+        user_info    = get_user_info(current_user)
+        display_name = user_info.get("display_name", current_user)
+        role         = user_info.get("role", "User")
+        st.markdown(
+            f'<div style="font-size:11px;color:{C["grey"]};margin-bottom:10px;line-height:1.8;">'
+            f'<div>👤 <b style="color:{C["white"]};">{display_name}</b></div>'
+            f'<div>🎖️ <span style="color:{C["gold"]};">{role}</span></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        if st.button("🚪 Log Out", key="logout_btn", use_container_width=True):
+            do_logout()
+            st.rerun()
+
     return st.session_state.page
 
 def page_header(title, subtitle=""):
@@ -1011,12 +1394,26 @@ def page_settings():
 # ─────────────────────────────────────────────
 def main():
     inject_css()
+
+    # Init auth session state
+    if "authenticated" not in st.session_state:
+        st.session_state.authenticated = False
+    if "current_user" not in st.session_state:
+        st.session_state.current_user = ""
+
+    # ── AUTH GATE ──
+    if not is_logged_in():
+        page_login()
+        return
+
+    # ── APP (only if authenticated) ──
     page = render_sidebar()
     if   page == "data_entry": page_data_entry()
     elif page == "analytics":  page_analytics()
     elif page == "ai":         page_ai()
     elif page == "records":    page_records()
     elif page == "settings":   page_settings()
+    elif page == "security":   page_security()
 
 if __name__ == "__main__":
     main()
