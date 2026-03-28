@@ -25,8 +25,8 @@ BRAND = {
     "tagline":    "Egypt's Premier Design & Décor Exhibition",
     "edition":    "2026 Edition",
     "currency":   "EGP",
-    "logo_emoji": "🎨",
-    "favicon":    "🎨",
+    "logo_emoji": "💡",
+    "favicon":    "💡",
 }
 
 st.set_page_config(
