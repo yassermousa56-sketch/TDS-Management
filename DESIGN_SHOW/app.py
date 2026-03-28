@@ -549,39 +549,51 @@ _SCOPES = [
 @st.cache_resource(ttl=3600)
 def _get_client():
     """Build and cache a gspread client from secrets.toml credentials."""
-    info = dict(st.secrets["connections"]["gsheets"])
-    # Fix escaped newlines in private_key (common copy-paste issue)
-    if "private_key" in info:
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
-    creds  = Credentials.from_service_account_info(info, scopes=_SCOPES)
+    # Convert AttrDict → plain dict (required by google-auth)
+    raw = st.secrets["gcp_service_account"]
+    info = {
+        "type":                        raw["type"],
+        "project_id":                  raw["project_id"],
+        "private_key_id":              raw["private_key_id"],
+        "private_key":                 raw["private_key"].replace("\\n", "\n"),
+        "client_email":                raw["client_email"],
+        "client_id":                   raw["client_id"],
+        "auth_uri":                    raw.get("auth_uri", "https://accounts.google.com/o/oauth2/auth"),
+        "token_uri":                   raw.get("token_uri", "https://oauth2.googleapis.com/token"),
+        "auth_provider_x509_cert_url": raw.get("auth_provider_x509_cert_url", "https://www.googleapis.com/oauth2/v1/certs"),
+        "client_x509_cert_url":        raw.get("client_x509_cert_url", ""),
+    }
+    creds = Credentials.from_service_account_info(info, scopes=_SCOPES)
     return gspread.authorize(creds)
 
 def _get_or_create_ws(title: str, headers: list) -> "gspread.Worksheet":
     """Open worksheet by name; create it with headers if it doesn't exist."""
     client = _get_client()
-    sh     = client.open_by_url(SPREADSHEET_URL)
+    sh = client.open_by_url(SPREADSHEET_URL)
     try:
         ws = sh.worksheet(title)
     except gspread.WorksheetNotFound:
         ws = sh.add_worksheet(title=title, rows=2000, cols=max(len(headers), 10))
         ws.append_row(headers, value_input_option="RAW")
         return ws
-    # Ensure headers row exists if sheet is blank
-    existing = ws.row_values(1)
-    if not existing:
+    # If sheet exists but is empty, write headers
+    if not ws.row_values(1):
         ws.append_row(headers, value_input_option="RAW")
     return ws
 
 def _check_connection() -> bool:
-    """Return True if GSheets is reachable, show warning otherwise."""
+    """Return True if GSheets is reachable, show error otherwise."""
     if not GSHEETS_AVAILABLE:
-        st.error("❌ gspread / google-auth not installed. Run: `pip install gspread google-auth`")
+        st.error("❌ gspread / google-auth غير مثبتين. شغّل: `pip install gspread google-auth`")
+        return False
+    if "gcp_service_account" not in st.secrets:
+        st.error("❌ مفيش `[gcp_service_account]` في ملف `.streamlit/secrets.toml`. راجع إعداد الـ credentials.")
         return False
     try:
-        _ = _get_client()
+        _get_client()
         return True
     except Exception as e:
-        st.error(f"❌ Google Sheets connection failed: {e}")
+        st.error(f"❌ فشل الاتصال بـ Google Sheets: {e}")
         return False
 
 
