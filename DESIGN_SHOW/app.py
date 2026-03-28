@@ -10,6 +10,13 @@ from datetime import datetime, date
 import warnings
 warnings.filterwarnings("ignore")
 
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    GSHEETS_AVAILABLE = True
+except ImportError:
+    GSHEETS_AVAILABLE = False
+
 # ─────────────────────────────────────────────
 # BRAND CONFIG
 # ─────────────────────────────────────────────
@@ -29,9 +36,10 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-CSV_FILE      = "design_show_exhibitors.csv"
-PAYMENTS_FILE = "design_show_payments.csv"
-USERS_FILE    = "design_show_users.json"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1iM_LIul_5_1CoKarEWu7WqohkgsuHWYgIHje4DUjd9I"
+WS_EXHIBITORS   = "Exhibitors"   # worksheet name in Google Sheet
+WS_PAYMENTS     = "Payments"     # worksheet name in Google Sheet
+USERS_FILE      = "design_show_users.json"
 
 COLUMNS = [
     "Company Name", "Category", "Booth Size Category", "Booth Area (m²)",
@@ -531,28 +539,84 @@ def safe_date(val) -> date:
 
 
 # ─────────────────────────────────────────────
-# DATA HELPERS — EXHIBITORS
+# GSHEETS — CLIENT & WORKSHEET HELPERS
 # ─────────────────────────────────────────────
+_SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+@st.cache_resource(ttl=3600)
+def _get_client():
+    """Build and cache a gspread client from secrets.toml credentials."""
+    info = dict(st.secrets["connections"]["gsheets"])
+    # Fix escaped newlines in private_key (common copy-paste issue)
+    if "private_key" in info:
+        info["private_key"] = info["private_key"].replace("\\n", "\n")
+    creds  = Credentials.from_service_account_info(info, scopes=_SCOPES)
+    return gspread.authorize(creds)
+
+def _get_or_create_ws(title: str, headers: list) -> "gspread.Worksheet":
+    """Open worksheet by name; create it with headers if it doesn't exist."""
+    client = _get_client()
+    sh     = client.open_by_url(SPREADSHEET_URL)
+    try:
+        ws = sh.worksheet(title)
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title=title, rows=2000, cols=max(len(headers), 10))
+        ws.append_row(headers, value_input_option="RAW")
+        return ws
+    # Ensure headers row exists if sheet is blank
+    existing = ws.row_values(1)
+    if not existing:
+        ws.append_row(headers, value_input_option="RAW")
+    return ws
+
+def _check_connection() -> bool:
+    """Return True if GSheets is reachable, show warning otherwise."""
+    if not GSHEETS_AVAILABLE:
+        st.error("❌ gspread / google-auth not installed. Run: `pip install gspread google-auth`")
+        return False
+    try:
+        _ = _get_client()
+        return True
+    except Exception as e:
+        st.error(f"❌ Google Sheets connection failed: {e}")
+        return False
+
+
+# ─────────────────────────────────────────────
+# DATA HELPERS — EXHIBITORS  (Google Sheets)
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=8)
 def load_data() -> pd.DataFrame:
-    if os.path.exists(CSV_FILE):
-        try:    df = pd.read_csv(CSV_FILE)
-        except: df = pd.DataFrame(columns=COLUMNS)
-    else:
+    try:
+        ws      = _get_or_create_ws(WS_EXHIBITORS, COLUMNS)
+        records = ws.get_all_records(expected_headers=COLUMNS, default_blank="")
+        df      = pd.DataFrame(records) if records else pd.DataFrame(columns=COLUMNS)
+    except Exception as e:
+        st.warning(f"⚠️ Could not load exhibitors: {e}")
         df = pd.DataFrame(columns=COLUMNS)
     for col in ["Booth Area (m²)", "Price per m²", "Total Booth Price", "Paid Amount", "Remaining Amount"]:
         df[col] = pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0)
     df["Contract Date"] = pd.to_datetime(df.get("Contract Date"), errors="coerce")
-    for col in ["Edition", "Hall / Zone", "Contact Person", "Contact Phone"]:
-        if col not in df.columns:
-            df[col] = ""
+    for col in ["Edition", "Hall / Zone", "Contact Person", "Contact Phone", "Notes"]:
+        if col not in df.columns: df[col] = ""
+        else:                     df[col] = df[col].fillna("")
     return df
 
 def save_data(df: pd.DataFrame):
-    df.to_csv(CSV_FILE, index=False)
+    ws = _get_or_create_ws(WS_EXHIBITORS, COLUMNS)
+    for col in COLUMNS:
+        if col not in df.columns: df[col] = ""
+    rows = [COLUMNS] + df[COLUMNS].fillna("").astype(str).values.tolist()
+    ws.clear()
+    ws.update(rows, value_input_option="USER_ENTERED")
+    st.cache_data.clear()
 
 def detect_status(paid: float, total: float) -> str:
     if total <= 0 or paid <= 0: return "Unpaid"
-    if paid >= total:            return "Fully Paid"
+    if paid >= total:           return "Fully Paid"
     return "Partial"
 
 def add_record(rec: dict):
@@ -570,20 +634,32 @@ def delete_record(idx: int):
 
 
 # ─────────────────────────────────────────────
-# DATA HELPERS — PAYMENTS
+# DATA HELPERS — PAYMENTS  (Google Sheets)
 # ─────────────────────────────────────────────
+@st.cache_data(ttl=8)
 def load_payments() -> pd.DataFrame:
-    if os.path.exists(PAYMENTS_FILE):
-        try:    pf = pd.read_csv(PAYMENTS_FILE)
-        except: pf = pd.DataFrame(columns=PAYMENT_COLUMNS)
-    else:
+    try:
+        ws      = _get_or_create_ws(WS_PAYMENTS, PAYMENT_COLUMNS)
+        records = ws.get_all_records(expected_headers=PAYMENT_COLUMNS, default_blank="")
+        pf      = pd.DataFrame(records) if records else pd.DataFrame(columns=PAYMENT_COLUMNS)
+    except Exception as e:
+        st.warning(f"⚠️ Could not load payments: {e}")
         pf = pd.DataFrame(columns=PAYMENT_COLUMNS)
-    pf["Amount"] = pd.to_numeric(pf.get("Amount", 0), errors="coerce").fillna(0)
+    pf["Amount"]       = pd.to_numeric(pf.get("Amount", 0), errors="coerce").fillna(0)
     pf["Payment Date"] = pd.to_datetime(pf.get("Payment Date"), errors="coerce")
+    for col in ["Reference", "Notes", "Method"]:
+        if col not in pf.columns: pf[col] = ""
+        else:                     pf[col] = pf[col].fillna("")
     return pf
 
 def save_payments(pf: pd.DataFrame):
-    pf.to_csv(PAYMENTS_FILE, index=False)
+    ws = _get_or_create_ws(WS_PAYMENTS, PAYMENT_COLUMNS)
+    for col in PAYMENT_COLUMNS:
+        if col not in pf.columns: pf[col] = ""
+    rows = [PAYMENT_COLUMNS] + pf[PAYMENT_COLUMNS].fillna("").astype(str).values.tolist()
+    ws.clear()
+    ws.update(rows, value_input_option="USER_ENTERED")
+    st.cache_data.clear()
 
 def _recalc(company: str):
     df = load_data(); pf = load_payments()
@@ -954,14 +1030,16 @@ def page_data_entry():
                 "Notes":notes.strip(),
             }
             if st.session_state.edit_mode and st.session_state.edit_idx is not None:
-                update_record(st.session_state.edit_idx, rec)
-                st.success("✅ Record updated successfully!")
+                with st.spinner("☁️ Syncing to Google Sheet..."):
+                    update_record(st.session_state.edit_idx, rec)
+                st.success("✅ Record updated & synced to Google Sheet!")
                 st.session_state.edit_mode = False; st.session_state.edit_idx = None
             else:
-                add_record(rec)
-                if live_paid > 0:
-                    log_payment(company.strip(), cdate, live_paid, pay_method_init, "", "Initial payment at registration")
-                st.success(f"✅ **{company}** registered! Total: EGP {total_price:,.0f} · Remaining: EGP {live_remain:,.0f}")
+                with st.spinner("☁️ Saving to Google Sheet..."):
+                    add_record(rec)
+                    if live_paid > 0:
+                        log_payment(company.strip(), cdate, live_paid, pay_method_init, "", "Initial payment at registration")
+                st.success(f"✅ **{company}** saved to Google Sheet! Total: EGP {total_price:,.0f} · Remaining: EGP {live_remain:,.0f}")
             st.rerun()
 
 
@@ -1337,8 +1415,8 @@ def page_settings():
             unsafe_allow_html=True,
         )
 
-    st.markdown('<div class="section-title">📥 Import Exhibitors</div>', unsafe_allow_html=True)
-    uploaded = st.file_uploader("Upload Exhibitors CSV", type=["csv"])
+    st.markdown('<div class="section-title">📥 Import from CSV (bulk upload)</div>', unsafe_allow_html=True)
+    uploaded = st.file_uploader("Upload Exhibitors CSV → pushes to Google Sheet", type=["csv"])
     if uploaded:
         try:
             new_df  = pd.read_csv(uploaded)
@@ -1347,35 +1425,74 @@ def page_settings():
             if missing: st.error(f"Missing required columns: {missing}")
             else:
                 mode = st.radio("Import Mode", ["Append to existing data","Replace all data"])
-                if st.button("✅ Confirm Import"):
+                if st.button("✅ Confirm Import → Push to Google Sheet"):
                     save_data(new_df if mode=="Replace all data" else pd.concat([df, new_df], ignore_index=True))
-                    st.success(f"Imported {len(new_df)} records."); st.rerun()
+                    st.success(f"✅ {len(new_df)} records pushed to Google Sheet."); st.rerun()
         except Exception as e: st.error(f"Import failed: {e}")
 
     st.markdown('<div class="section-title">🗑️ Danger Zone</div>', unsafe_allow_html=True)
     with st.expander("⚠️ Destructive Actions — Irreversible"):
-        st.warning("All data will be permanently deleted.")
+        st.warning("This will clear ALL rows from the Google Sheet worksheets.")
         confirm = st.text_input("Type DELETE ALL to confirm")
-        if st.button("🗑️ Delete All Exhibitors & Payment History"):
+        if st.button("🗑️ Clear All Exhibitors & Payments from Google Sheet"):
             if confirm == "DELETE ALL":
                 save_data(pd.DataFrame(columns=COLUMNS))
                 save_payments(pd.DataFrame(columns=PAYMENT_COLUMNS))
-                st.success("All data deleted."); st.rerun()
+                st.success("✅ All data cleared from Google Sheet."); st.rerun()
             else: st.error("Type 'DELETE ALL' exactly.")
 
-    st.markdown('<div class="section-title">ℹ️ System Information</div>', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">☁️ Google Sheets Connection</div>', unsafe_allow_html=True)
     c3, c4 = st.columns(2)
     with c3:
+        gs_ok = GSHEETS_AVAILABLE
+        try:
+            _get_client()
+            conn_status = "✅ Connected & Active"
+            conn_color  = C["green"]
+        except Exception as e:
+            conn_status = f"❌ {e}"
+            conn_color  = C["red"]
         st.markdown(
-            f'<div class="insight-card"><div class="insight-title">Data Files</div>'
+            f'<div class="insight-card"><div class="insight-title">🔗 Connection Status</div>'
             f'<div class="insight-body">'
-            f'Exhibitors: <code>{os.path.abspath(CSV_FILE)}</code><br>'
-            f'Payments: <code>{os.path.abspath(PAYMENTS_FILE)}</code><br>'
-            f'Status: {"✅ Files exist" if os.path.exists(CSV_FILE) else "⚠️ Not created yet"}'
+            f'Library (gspread): <b>{"✅ Installed" if gs_ok else "❌ Run: pip install gspread google-auth"}</b><br>'
+            f'Status: <b style="color:{conn_color};">{conn_status}</b><br>'
+            f'Spreadsheet: <code style="font-size:10px;word-break:break-all;">{SPREADSHEET_URL}</code><br>'
+            f'Exhibitors sheet: <b>{WS_EXHIBITORS}</b><br>'
+            f'Payments sheet: <b>{WS_PAYMENTS}</b><br>'
+            f'Live rows: <b>{len(df)}</b> exhibitors · <b>{len(pf)}</b> payments'
             f'</div></div>',
             unsafe_allow_html=True,
         )
     with c4:
+        st.markdown(
+            f'<div class="insight-card"><div class="insight-title">⚙️ .streamlit/secrets.toml Setup</div>'
+            f'<div class="insight-body" style="font-size:11px;">'
+            f'<code>[connections.gsheets]<br>'
+            f'type = "service_account"<br>'
+            f'project_id = "your-project-id"<br>'
+            f'private_key_id = "..."<br>'
+            f'private_key = "-----BEGIN RSA..."<br>'
+            f'client_email = "your@sa.iam.gserviceaccount.com"<br>'
+            f'client_id = "..."<br>'
+            f'token_uri = "https://oauth2.googleapis.com/token"</code><br><br>'
+            f'📌 Share the Sheet with <b>client_email</b> as <b>Editor</b>.'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown('<div class="section-title">ℹ️ System Information</div>', unsafe_allow_html=True)
+    c5, c6 = st.columns(2)
+    with c5:
+        st.markdown(
+            f'<div class="insight-card"><div class="insight-title">Users File (local)</div>'
+            f'<div class="insight-body">'
+            f'Path: <code>{os.path.abspath(USERS_FILE)}</code><br>'
+            f'Status: {"✅ Exists" if os.path.exists(USERS_FILE) else "⚠️ Will be created on first login"}'
+            f'</div></div>',
+            unsafe_allow_html=True,
+        )
+    with c6:
         st.markdown(
             f'<div class="insight-card"><div class="insight-title">{BRAND["name"]} — {BRAND["edition"]}</div>'
             f'<div class="insight-body">'
@@ -1406,7 +1523,11 @@ def main():
         page_login()
         return
 
-    # ── APP (only if authenticated) ──
+    # ── GSHEETS CONNECTION CHECK ──
+    if not _check_connection():
+        st.stop()
+
+    # ── APP (only if authenticated + connected) ──
     page = render_sidebar()
     if   page == "data_entry": page_data_entry()
     elif page == "analytics":  page_analytics()
