@@ -21,9 +21,9 @@ except ImportError:
 # BRAND CONFIG
 # ─────────────────────────────────────────────
 BRAND = {
-    "name":       "The Design Show",
+    "name":       "Design Show",
     "tagline":    "Egypt's Premier Design & Décor Exhibition",
-    "edition":    "2025 Edition",
+    "edition":    "2026 Edition",
     "currency":   "EGP",
     "logo_emoji": "🎨",
     "favicon":    "🎨",
@@ -52,7 +52,7 @@ PAYMENT_COLUMNS = ["Company Name", "Payment Date", "Amount", "Method", "Referenc
 BOOTH_SIZES      = ["Small (≤18m²)", "Medium (18–36m²)", "Large (36–72m²)", "XL (72m²+)"]
 PAYMENT_STATUSES = ["Unpaid", "Partial", "Fully Paid"]
 PAYMENT_METHODS  = ["Cash", "Bank Transfer", "Cheque", "Credit Card", "Installment", "Other"]
-EDITIONS         = ["Design Show 2024", "Design Show 2025", "Design Show 2026"]
+EDITIONS         = ["Design Show 2026"]
 HALLS = [
     "Hall A — Premium", "Hall B — Standard", "Hall C — Emerging Brands",
     "Hall D — International", "Outdoor Pavilion", "VIP Lounge Area",
